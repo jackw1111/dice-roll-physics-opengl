@@ -47,9 +47,11 @@ public:
 
     // constructor
     Mesh(vector<Vertex> vertices, vector<unsigned int> indices, vector<Texture> textures);
-
     // render the mesh
     void Draw(Shader &shader);
+
+    std::vector<float> limits = {};
+    std::vector<float> getAABB();
 
 private:
     // render data 

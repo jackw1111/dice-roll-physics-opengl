@@ -1,6 +1,6 @@
 # Blender v2.82 (sub 7) OBJ File: ''
 # www.blender.org
-mtllib dice.mtl
+mtllib die.mtl
 o Cube
 v 0.787868 0.787868 -1.000000
 v 0.787868 1.000000 -0.787868

@@ -94,3 +94,36 @@ void Mesh::setupMesh()
 	glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, m_Weights));
     glBindVertexArray(0);
 }
+
+std::vector<float> Mesh::getAABB() {
+    if (limits.size()) {
+        return limits;
+    }
+    float minX = numeric_limits<float>::max();
+    float maxX = numeric_limits<float>::min();
+    float minY = numeric_limits<float>::max();
+    float maxY = numeric_limits<float>::min();
+    float minZ = numeric_limits<float>::max();
+    float maxZ = numeric_limits<float>::min();
+    for(unsigned int i = 0; i < vertices.size(); i++)
+    {
+        if (vertices[i].Position.x < minX) {
+            minX = vertices[i].Position.x;
+        } else if (vertices[i].Position.x > maxX) {
+            maxX = vertices[i].Position.x;
+        }
+        if (vertices[i].Position.y < minY) {
+            minY = vertices[i].Position.y;
+        } else if (vertices[i].Position.y > maxY) {
+            maxY = vertices[i].Position.y;
+        }
+        if (vertices[i].Position.z < minZ) {
+            minZ = vertices[i].Position.z;
+        } else if (vertices[i].Position.z > maxZ) {
+            maxZ = vertices[i].Position.z;
+        }
+    }
+    limits = {minX, minY, minZ, maxX, maxY, maxZ};
+    return limits;
+}
+

@@ -1,4 +1,5 @@
 
+#include <iostream>
 
 #include "glad.h"
 #include <GLFW/glfw3.h>
@@ -9,25 +10,25 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/string_cast.hpp>
 
 #include "shader.h"
 #include "camera.h"
 #include "model.h"
 #include "math_utils.h"
-
-#include <iostream>
+#include "line.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow *window);
 unsigned int loadTexture(const char *path);
-void renderScene(const Shader &shader);
 void renderQuad();
+glm::mat4 generateShadowMap();
 
 // settings
-const unsigned int SCR_WIDTH = 1280;
-const unsigned int SCR_HEIGHT = 720;
+const unsigned int SCR_WIDTH = 800;
+const unsigned int SCR_HEIGHT = 600;
 
 // camera
 Camera camera(glm::vec3(0.0f, 10.0f, 15.0f), glm::vec3(0.0f, 1.0f, 0.0f), YAW, -25.0f);
@@ -42,23 +43,143 @@ float lastFrame = 0.0f;
 // meshes
 unsigned int planeVAO;
 
-glm::vec3 die1_position(0.0f, 5.0f, 0.0f);
-glm::vec3 die2_position(3.0f, 2.0f, 0.0f);
 glm::vec3 gravity(0.0f, -10.0f, 0.0f);
-glm::vec3 die1_velocity(0.0f, 0.0f, 0.0f);
 
-float rotation_x = 0.0f;
-float rotation_z = 0.0f;
+bool reset = false;
 
-glm::mat4 rotation_matrix = glm::rotate(glm::mat4(1.0f), glm::radians(25.0f), glm::vec3(0.2f, 0.5f, 1.0f));
+glm::vec3 lightPos(-2.0f, 4.0f, -1.0f);
 
 
-glm::vec3 colliding_normal(0.0f, 1.0f, 0.0f);
-glm::mat4 planeModelMatrix = glm::mat4(1.0f);
+float rotation1_x = 0.0f;
+float rotation1_y = 0.0f;
+float rotation1_z = 0.0f;
 
-glm::vec3 reflect(glm::vec3 I, glm::vec3 N) {
-    return I  + N  * -2.0f * glm::dot(N, I);
-}
+class Plane {
+public:
+    Plane(glm::vec3 n, glm::mat4 m) {
+        normal = n;
+        modelMatrix = m;
+    }
+    glm::vec3 normal;
+    glm::mat4 modelMatrix;
+};
+
+class Die {
+public:
+    // Center Of Mass
+    glm::vec3 position;
+    // Linear Velocity
+    glm::vec3 velocity;
+
+    glm::vec3 originalPosition;
+    glm::vec3 originalVelocity;
+
+    glm::mat4 rotationMatrix;
+    glm::mat4 modelMatrix;
+
+    glm::vec3 collisionPosition;
+    glm::vec3 collisionNormal;
+    glm::vec3 penetrationVector;
+
+    float rx = 0.0f;
+    float ry = 0.0f;
+    float rz = 0.0f;
+    float r  = 0.0f;
+
+    glm::vec3 rotationAxis;
+
+    glm::vec3 impulse;
+
+    Model *model;
+    BCube obb;
+    std::vector<float> aabb = {};
+    bool applyImpulse = false;
+
+    Die(glm::vec3 pos, glm::vec3 vel) {
+        originalPosition = pos;
+        originalVelocity = vel;
+        position = pos;
+        velocity = vel;
+        model = new Model("data/die.obj", false);
+        aabb = model->meshes[0].getAABB();
+        obb.setup(glm::vec3(aabb[0], aabb[1], aabb[2]), glm::vec3(aabb[3], aabb[4], aabb[5]));
+        rotationMatrix = glm::mat4(1.0f);
+        modelMatrix = glm::mat4(1.0f);
+        collisionPosition = glm::vec3(0,0,0);
+        collisionNormal = glm::vec3(0,0,0);
+        penetrationVector = glm::vec3(0,0,0);
+        rotationAxis = glm::vec3(0,0,0);
+    }
+
+    void collideWithPlane(Plane plane) {
+        float smallest = 0.0f;
+        for (int i = 0; i < obb.translated_vertices.size(); i++) {
+            glm::vec3 v = obb.translated_vertices.at(i);
+            float d = glm::dot( glm::vec4(plane.normal.x, plane.normal.y, plane.normal.z, 0.0f), glm::vec4(v.x, v.y, v.z, 1.0f) );
+
+            if (d < 0) {
+                if (d < smallest) {
+                    smallest = d;
+                    collisionPosition = obb.translated_vertices.at(i);
+                }
+            }
+        }
+        if (smallest < 0.0f) {
+            glm::vec3 a = collisionPosition - penetrationVector;
+            glm::vec3 b = glm::vec4(-1.0f,  1.0f, 0.0f, 1.0f) * plane.modelMatrix;
+            glm::vec3 c = glm::vec4(-1.0f, -1.0f, 0.0f, 1.0f) * plane.modelMatrix;
+            glm::vec3 d = glm::vec4( 1.0f, -1.0f, 0.0f, 1.0f) * plane.modelMatrix;
+            glm::vec3 e = glm::vec4( 1.0f,  1.0f, 0.0f, 1.0f) * plane.modelMatrix;
+            if (glm::dot(b, c - b) <= glm::dot(a, c - b) && glm::dot(a, c - b) <= glm::dot(c, c-b) &&
+            glm::dot(b, e - b) <= glm::dot(a, e - b) && glm::dot(a, e - b) <= glm::dot(e, e-b)) {
+                collisionNormal = glm::normalize(plane.normal);
+                penetrationVector = collisionNormal * smallest;
+                velocity *= 0.85f;
+                position -= penetrationVector;
+                applyImpulse = true;
+                impulse = collisionNormal * 60.0f * glm::length(velocity);
+            }
+        }
+    }
+
+    void update(glm::vec3 gravityForce, float deltaTime) {
+        glm::vec3 netAcceleration = gravityForce + impulse;
+        if (applyImpulse) {
+            applyImpulse = false;
+            impulse = glm::vec3(0,0,0);
+            r = glm::length(glm::cross(collisionPosition - position, velocity)); 
+            rotationAxis = glm::cross(collisionPosition - position, collisionNormal);
+        }
+        glm::vec3 netVelocity = netAcceleration * deltaTime;
+        velocity += netVelocity;
+        position += velocity * deltaTime;
+        if (rotationAxis != glm::vec3(0,0,0)) {
+            rotationMatrix = rotate(rotationMatrix, glm::radians(r), rotationAxis);
+        }
+
+        obb.getTranslatedVertices(modelMatrix);
+        obb.velocity = velocity;
+    }
+
+    void draw(Shader &shader) {
+        modelMatrix = glm::translate(glm::mat4(1.0f), position);
+        modelMatrix = modelMatrix * rotationMatrix;
+        shader.setMat4("model", modelMatrix);
+        model->Draw(shader);    
+    }
+
+    void reset() {
+        velocity = originalVelocity;
+        position = originalPosition;
+        rotationAxis = glm::vec3(rand() % 1 + 1, rand() % 1 + 1, rand() % 1 + 1);
+        rotationMatrix = glm::mat4(1.0f);
+        r = rand() % 10;
+        rotationMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(r), glm::normalize(rotationAxis));
+        modelMatrix = glm::mat4(1.0f);
+    }
+};
+
+Plane plane(glm::vec3(0,1,0), glm::mat4(1.0f));
 
 int main()
 {
@@ -73,9 +194,10 @@ int main()
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
+    // glfwGetPrimaryMonitor()
     // glfw window creation
     // --------------------
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "LearnOpenGL", glfwGetPrimaryMonitor(), NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "LearnOpenGL", NULL, NULL);
     if (window == NULL)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -104,9 +226,8 @@ int main()
 
     // build and compile shaders
     // -------------------------
-    Shader shader("shaders/shadow_mapping.vs", "shaders/shadow_mapping.fs", nullptr);
-    Shader simpleDepthShader("shaders/shadow_mapping_depth.vs", "shaders/shadow_mapping_depth.fs", nullptr);
-    Shader debugDepthQuad("shaders/debug_quad.vs", "shaders/debug_quad_depth.fs", nullptr);
+    Shader basicShader("shaders/basic_shader.vs", "shaders/basic_shader.fs", nullptr);
+    Shader shadowMapShader("shaders/shadow_map_shader.vs", "shaders/shadow_map_shader.fs", nullptr);
     Shader normalShader("shaders/normal_map_shader.vs", "shaders/normal_map_shader.fs", nullptr);
 
     // set up vertex data (and buffer(s)) and configure vertex attributes
@@ -139,7 +260,6 @@ int main()
     // load textures
     // -------------
     unsigned int diffuseMap = loadTexture("data/brickwall.jpg");
-    unsigned int woodTexture = loadTexture("data/brickwall.jpg");
     unsigned int normalMap  = loadTexture("data/brickwall_normal.jpg");
 
 
@@ -169,31 +289,22 @@ int main()
 
     // shader configuration
     // --------------------
-    shader.use();
-    shader.setInt("diffuseTexture", 0);
-    shader.setInt("shadowMap", 1);
-    shader.setInt("normalMap", 2);
-    debugDepthQuad.use();
-    debugDepthQuad.setInt("depthMap", 0);
-
-    // lighting info
-    // -------------
-    glm::vec3 lightPos(-2.0f, 4.0f, -1.0f);
-
-    Model ourModel("data/dice.obj", false);
-    Shader ourShader("shaders/basic_shader.vs", "shaders/basic_shader.fs", nullptr);
-
-
-    Model ourModel2("data/dice.obj", false);
+    basicShader.use();
+    basicShader.setInt("diffuseTexture", 0);
+    basicShader.setInt("shadowMap", 1);
+    basicShader.setInt("normalMap", 2);
 
     normalShader.use();
     normalShader.setInt("diffuseMap", 0);
     normalShader.setInt("normalMap", 1);
     normalShader.setInt("shadowMap", 2);
 
+    plane.modelMatrix = glm::scale(plane.modelMatrix, glm::vec3(10.0f));
+    plane.modelMatrix = rotate(plane.modelMatrix, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
-    planeModelMatrix = glm::scale(planeModelMatrix, glm::vec3(10.0f));
-    planeModelMatrix = rotate(planeModelMatrix, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    Die die1(glm::vec3(2.0f, 5.0f, 0.0f), glm::vec3(0.6f, 0.0f, 0.0f));
+    Die die2(glm::vec3(-2.0f, 5.0f, 0.0f), glm::vec3(0.8f, 0.0f, 0.0f));
+
 
     // render loop
     // -----------
@@ -210,68 +321,68 @@ int main()
         processInput(window);
 
         if (deltaTime < 1.0) {
-            //std::cout << die1_velocity.x << ", " << die1_velocity.y << ", " << die1_velocity.z << std::endl;
-            die1_velocity += gravity * deltaTime;
-            die1_position += die1_velocity * deltaTime;
-            float d = intersectPlane(colliding_normal, glm::vec3(0.0f, 0.0f, 0.0f), die1_position, glm::normalize(die1_position + die1_velocity));
-            //std::cout << d << std::endl;
-            if (abs(d) < 1.4) {
-                //std::cout << colliding_normal.x << ", " << colliding_normal.y << ", " << colliding_normal.z << std::endl;
 
-                die1_velocity = reflect(die1_velocity, colliding_normal) * 0.95f;
-                rotation_z = rotation_z * 0.7f + colliding_normal.z * 10.0f;
-                rotation_x = rotation_x * 0.7f + colliding_normal.x * 10.0f;
+            die1.update(gravity, deltaTime);
+            die1.collideWithPlane(plane);
+            die2.update(gravity, deltaTime);
+            die2.collideWithPlane(plane);
+
+            if (reset) {
+                die1.reset();
+                die2.reset();
+                reset = false;
             }
 
-            if (die1_position.y < 0.7f) {
-                die1_position.y = 0.7f;
+            CollisionInfo c = check_collision(die1.obb, die2.obb);
+
+            if (c.depth != 0.0f) {
+                float d =c.depth;
+                glm::vec3 collidingNormal = c.normal;
+                glm::vec3 penetrationVector = die1.velocity * d;
+                glm::vec3 collidingPosition = c.position;
+
+                die1.velocity = reflect(die1.velocity, collidingNormal) * 0.65f;
+                glm::vec3 cn = collidingNormal * -1.0f;
+                glm::vec3 surfaceTangent = glm::normalize(collidingPosition - die1.position);
+                glm::vec3 st_z = glm::vec3(surfaceTangent.x, surfaceTangent.y, 0.0);
+                rotation1_z = glm::dot(st_z, glm::vec3(cn.x, cn.y, 0.0f));
+                glm::vec3 st_y = glm::vec3(surfaceTangent.x, 0.0, surfaceTangent.z);
+                rotation1_y = glm::dot(st_y, glm::vec3(cn.x, 0.0f, cn.z));
+                glm::vec3 st_x = glm::vec3(0.0f, surfaceTangent.y, surfaceTangent.z);
+                rotation1_x = glm::dot(st_x, glm::vec3(0.0f, cn.y, cn.z));
             }
 
-            rotation_matrix = rotation_matrix * glm::mat4(glm::angleAxis(glm::radians(rotation_z), glm::vec3(1, 0, 0)));
-            rotation_matrix = rotation_matrix * glm::mat4(glm::angleAxis(glm::radians(rotation_x), glm::vec3(0, 0, 1)));
+            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_x), glm::vec3(1, 0, 0))) * die1.rotationMatrix;
+            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_y), glm::vec3(0, 1, 0))) * die1.rotationMatrix;
+            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_z), glm::vec3(0, 0, 1))) * die1.rotationMatrix;
+
+            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_x), glm::vec3(1, 0, 0))) * die2.rotationMatrix;
+            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_y), glm::vec3(0, 1, 0))) * die2.rotationMatrix;
+            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_z), glm::vec3(0, 0, 1))) * die2.rotationMatrix;
+
 
         }
-
-        // change light position over time
-        //lightPos.x = sin(glfwGetTime()) * 3.0f;
-        //lightPos.z = cos(glfwGetTime()) * 2.0f;
-        //lightPos.y = 5.0 + cos(glfwGetTime()) * 1.0f;
-
         // render
         // ------
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // 1. render depth of scene to texture (from light's perspective)
-        // --------------------------------------------------------------
-        glm::mat4 lightProjection, lightView;
-        glm::mat4 lightSpaceMatrix;
-        float near_plane = 1.0f, far_plane = 7.5f;
-        //lightProjection = glm::perspective(glm::radians(45.0f), (GLfloat)SHADOW_WIDTH / (GLfloat)SHADOW_HEIGHT, near_plane, far_plane); // note that if you use a perspective projection matrix you'll have to change the light position as the current light position isn't enough to reflect the whole scene
-        lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, near_plane, far_plane);
-        lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0, 1.0, 0.0));
-        lightSpaceMatrix = lightProjection * lightView;
+        glm::mat4 lightSpaceMatrix = generateShadowMap();
+
+
         // render scene from light's point of view
-        simpleDepthShader.use();
-        simpleDepthShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
-        simpleDepthShader.setMat4("model", planeModelMatrix);
+        shadowMapShader.use();
+        shadowMapShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+        shadowMapShader.setMat4("model", plane.modelMatrix);
 
         glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
         glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
             glClear(GL_DEPTH_BUFFER_BIT);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, woodTexture);
-            //renderScene(simpleDepthShader);
+            glBindTexture(GL_TEXTURE_2D, diffuseMap);
             renderQuad();
-            glm::mat4 die1_model = glm::translate(glm::mat4(1.0f), die1_position);
-            die1_model = die1_model * rotation_matrix;
-            simpleDepthShader.setMat4("model", die1_model);
-            ourModel.Draw(simpleDepthShader);
-            glm::mat4 die2_model = glm::rotate(glm::mat4(1.0f), glm::radians(65.0f), glm::vec3(1,0,1));
-            die2_model = glm::translate(die2_model, die2_position);
-
-            simpleDepthShader.setMat4("model", die2_model);
-            //ourModel2.Draw(simpleDepthShader);
+            die1.draw(shadowMapShader);
+            die2.draw(shadowMapShader);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -283,9 +394,23 @@ int main()
         // --------------------------------------------------------------
         glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        normalShader.use();
+
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
         glm::mat4 view = camera.GetViewMatrix();
+
+
+        glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
+        die1.obb.setMatrix("projection", projection);
+        die1.obb.setMatrix("view", view);
+        die1.obb.setMatrix("model", die1.modelMatrix);
+        //die1.obb.draw();
+        die2.obb.setMatrix("projection", projection);
+        die2.obb.setMatrix("view", view);
+        die2.obb.setMatrix("model", die2.modelMatrix);
+        //die2.obb.draw();
+        glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
+
+        normalShader.use();
         normalShader.setMat4("projection", projection);
         normalShader.setMat4("view", view);
         // set light uniforms
@@ -296,7 +421,7 @@ int main()
         glm::mat4 model = glm::mat4(1.0f);
 
         //model = glm::rotate(model, glm::radians((float)glfwGetTime() * -10.0f), glm::normalize(glm::vec3(1.0, 0.0, 1.0))); // rotate the quad to show normal mapping from multiple directions
-        normalShader.setMat4("model", planeModelMatrix);
+        normalShader.setMat4("model", plane.modelMatrix);
         normalShader.setVec3("viewPos", camera.Position);
         normalShader.setVec3("lightPos", lightPos);
 
@@ -308,39 +433,28 @@ int main()
         glBindTexture(GL_TEXTURE_2D, depthMap);
         renderQuad();
 
-        shader.use();
+        basicShader.use();
         projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
         view = camera.GetViewMatrix();
-        shader.setMat4("projection", projection);
-        shader.setMat4("view", view);
+        basicShader.setMat4("projection", projection);
+        basicShader.setMat4("view", view);
         // set light uniforms
-        shader.setVec3("viewPos", camera.Position);
-        shader.setVec3("lightPos", lightPos);
-        shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+        basicShader.setVec3("viewPos", camera.Position);
+        basicShader.setVec3("lightPos", lightPos);
+        basicShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, woodTexture);
+        glBindTexture(GL_TEXTURE_2D, diffuseMap);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, depthMap);
-        shader.setMat4("model", die1_model);
-        ourModel.Draw(shader);
-        shader.setMat4("model", die2_model);
-        //ourModel2.Draw(shader);
 
-        // ourShader.use();
-        // ourShader.setMat4("projection", projection);
-        // ourShader.setMat4("view", view);        
-        // ourShader.setMat4("model", glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.0f)));
+        die1.draw(basicShader);
+        die2.draw(basicShader);
 
-
-
-        // render Depth map to quad for visual debugging
-        // ---------------------------------------------
-        debugDepthQuad.use();
-        debugDepthQuad.setFloat("near_plane", near_plane);
-        debugDepthQuad.setFloat("far_plane", far_plane);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, depthMap);
-        //renderQuad();
+        glDisable(GL_DEPTH_TEST);
+        // Line line(collidingPosition, collidingPosition + rot_axis);
+        // line.setMVP(projection * view);
+        // line.draw();
+        glEnable(GL_DEPTH_TEST);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -356,20 +470,6 @@ int main()
     glfwTerminate();
     return 0;
 }
-
-// renders the 3D scene
-// --------------------
-void renderScene(const Shader &shader)
-{
-    // floor
-    glm::mat4 model = glm::mat4(1.0f);
-    shader.setMat4("model", model);
-    glBindVertexArray(planeVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-}
-
-
-
 
 // renders a 1x1 quad in NDC with manually calculated tangent vectors
 // ------------------------------------------------------------------
@@ -480,8 +580,7 @@ void processInput(GLFWwindow *window)
         camera.ProcessKeyboard(RIGHT, deltaTime);
 
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-        die1_position = glm::vec3(0.0f, 5.0f, 0.0f);
-        die1_velocity = glm::vec3(0.0f, 0.0f, 0.0f);
+        reset = true;
     }
 }
 
@@ -510,14 +609,14 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 
     lastX = xpos;
     lastY = ypos;
-    planeModelMatrix = glm::rotate(planeModelMatrix, glm::radians(-1.0f*yoffset*0.01f), glm::vec3(1.0f, 0.0f, 0.0f));
+    plane.modelMatrix = glm::rotate(plane.modelMatrix, glm::radians(-1.0f*yoffset*0.01f), glm::vec3(1.0f, 0.0f, 0.0f));
 
-    planeModelMatrix = glm::rotate(planeModelMatrix, glm::radians(xoffset*0.01f), glm::vec3(0.0f, 1.0f, 0.0f));
+    plane.modelMatrix = glm::rotate(plane.modelMatrix, glm::radians(xoffset*0.01f), glm::vec3(0.0f, 1.0f, 0.0f));
 
 
-    glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(planeModelMatrix)));
+    glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(plane.modelMatrix)));
     glm::vec3 normal = glm::vec3(0.0f,0.0f,1.0f);
-    colliding_normal = glm::normalize(normalMatrix * normal);
+    plane.normal = glm::normalize(normalMatrix * normal);
 
     //camera.ProcessMouseMovement(xoffset, yoffset, true);
 }
@@ -568,3 +667,78 @@ unsigned int loadTexture(char const * path)
     return textureID;
 }
 
+
+glm::mat4 generateShadowMap() {
+    float nearDist = 0.01f, farDist = 30.0f;
+    float fov = glm::radians(camera.Zoom);
+
+    float ar = (float)SCR_WIDTH / (float)SCR_HEIGHT;
+    float Hnear = 2* tan(fov/2) * nearDist;
+    float Wnear = Hnear * ar;
+    float Hfar = 2* tan(fov/2) * farDist;
+    float Wfar = Hfar * ar; 
+    glm::vec3 centerFar = camera.Position + camera.Front * farDist;
+
+    glm::vec3 topLeftFar = centerFar + (camera.Up * Hfar/2.0f) - (camera.Right * Wfar/2.0f);
+    glm::vec3 topRightFar = centerFar + (camera.Up * Hfar/2.0f) + (camera.Right * Wfar/2.0f);
+    glm::vec3 bottomLeftFar = centerFar - (camera.Up  * Hfar/2.0f) - (camera.Right * Wfar/2.0f);
+    glm::vec3 bottomRightFar = centerFar - (camera.Up * Hfar/2.0f) + (camera.Right * Wfar/2.0f);
+
+    glm::vec3 centerNear = camera.Position + camera.Front * nearDist;
+
+    glm::vec3 topLeftNear = centerNear + (camera.Up * Hnear/2.0f) - (camera.Right * Wnear/2.0f);
+    glm::vec3 topRightNear = centerNear + (camera.Up * Hnear/2.0f) + (camera.Right * Wnear/2.0f);
+    glm::vec3 bottomLeftNear = centerNear - (camera.Up * Hnear/2.0f) - (camera.Right * Wnear/2.0f);
+    glm::vec3 bottomRightNear = centerNear - (camera.Up * Hnear/2.0f) + (camera.Right * Wnear/2.0f);
+
+    glm::vec3 frustumCenter = (centerFar- centerNear)*0.5f;
+
+    glm::mat4 lightView = glm::lookAt(glm::normalize(lightPos), glm::vec3(0,0,0), glm::vec3(0,0,1));
+
+    std::array<glm::vec3, 8> frustumToLightView
+    {
+        lightView * glm::vec4(bottomRightNear, 1.0f),
+        lightView * glm::vec4(topRightNear, 1.0f),
+        lightView * glm::vec4(bottomLeftNear, 1.0f),
+        lightView * glm::vec4(topLeftNear, 1.0f),
+        lightView * glm::vec4(bottomRightFar, 1.0f),
+        lightView * glm::vec4(topRightFar, 1.0f),
+        lightView * glm::vec4(bottomLeftFar, 1.0f),
+        lightView * glm::vec4(topLeftFar, 1.0f)
+    };
+
+    // find max and min points to define a ortho matrix around
+    glm::vec3 min{ INFINITY, INFINITY, INFINITY };
+    glm::vec3 max{ -INFINITY, -INFINITY, -INFINITY };
+    for (unsigned int i = 0; i < frustumToLightView.size(); i++)
+    {
+        if (frustumToLightView[i].x < min.x)
+            min.x = frustumToLightView[i].x;
+        if (frustumToLightView[i].y < min.y)
+            min.y = frustumToLightView[i].y;
+        if (frustumToLightView[i].z < min.z)
+            min.z = frustumToLightView[i].z;
+
+        if (frustumToLightView[i].x > max.x)
+            max.x = frustumToLightView[i].x;
+        if (frustumToLightView[i].y > max.y)
+            max.y = frustumToLightView[i].y;
+        if (frustumToLightView[i].z > max.z)
+            max.z = frustumToLightView[i].z;
+    }
+
+    float l = min.x;
+    float r = max.x;
+    float b = min.y;
+    float t = max.y;
+    // because max.z is positive and in NDC the positive z axis is 
+    // towards us so need to set it as the near plane flipped same for min.z.
+    float n = -max.z;
+    float f = -min.z;
+
+    // finally, set our ortho projection
+    // and create the light space view-projection matrix
+    glm::mat4 lightProjection = glm::ortho(l,r,b,t,n,f);
+    glm::mat4 lightSpaceMatrix = lightProjection * lightView;
+    return lightSpaceMatrix;
+}
