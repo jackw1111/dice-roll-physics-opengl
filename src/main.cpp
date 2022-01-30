@@ -1,4 +1,3 @@
-
 #include <iostream>
 
 #include "glad.h"
@@ -15,8 +14,7 @@
 #include "shader.h"
 #include "camera.h"
 #include "model.h"
-#include "math_utils.h"
-#include "line.h"
+#include "physics.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -43,16 +41,18 @@ float lastFrame = 0.0f;
 // meshes
 unsigned int planeVAO;
 
-glm::vec3 gravity(0.0f, -10.0f, 0.0f);
-
-bool reset = false;
-
 glm::vec3 lightPos(-2.0f, 4.0f, -1.0f);
-
 
 float rotation1_x = 0.0f;
 float rotation1_y = 0.0f;
 float rotation1_z = 0.0f;
+
+unsigned int maxContacts = 256;
+Contact contacts[256];
+CollisionData cData;
+ContactResolver resolver;
+unsigned int boxes = 3;
+CollisionBox* boxData[3];
 
 class Plane {
 public:
@@ -66,116 +66,17 @@ public:
 
 class Die {
 public:
-    // Center Of Mass
-    glm::vec3 position;
-    // Linear Velocity
-    glm::vec3 velocity;
-
-    glm::vec3 originalPosition;
-    glm::vec3 originalVelocity;
-
-    glm::mat4 rotationMatrix;
     glm::mat4 modelMatrix;
 
-    glm::vec3 collisionPosition;
-    glm::vec3 collisionNormal;
-    glm::vec3 penetrationVector;
-
-    float rx = 0.0f;
-    float ry = 0.0f;
-    float rz = 0.0f;
-    float r  = 0.0f;
-
-    glm::vec3 rotationAxis;
-
-    glm::vec3 impulse;
-
     Model *model;
-    BCube obb;
-    std::vector<float> aabb = {};
-    bool applyImpulse = false;
 
     Die(glm::vec3 pos, glm::vec3 vel) {
-        originalPosition = pos;
-        originalVelocity = vel;
-        position = pos;
-        velocity = vel;
         model = new Model("data/die.obj", false);
-        aabb = model->meshes[0].getAABB();
-        obb.setup(glm::vec3(aabb[0], aabb[1], aabb[2]), glm::vec3(aabb[3], aabb[4], aabb[5]));
-        rotationMatrix = glm::mat4(1.0f);
-        modelMatrix = glm::mat4(1.0f);
-        collisionPosition = glm::vec3(0,0,0);
-        collisionNormal = glm::vec3(0,0,0);
-        penetrationVector = glm::vec3(0,0,0);
-        rotationAxis = glm::vec3(0,0,0);
-    }
-
-    void collideWithPlane(Plane plane) {
-        float smallest = 0.0f;
-        for (int i = 0; i < obb.translated_vertices.size(); i++) {
-            glm::vec3 v = obb.translated_vertices.at(i);
-            float d = glm::dot( glm::vec4(plane.normal.x, plane.normal.y, plane.normal.z, 0.0f), glm::vec4(v.x, v.y, v.z, 1.0f) );
-
-            if (d < 0) {
-                if (d < smallest) {
-                    smallest = d;
-                    collisionPosition = obb.translated_vertices.at(i);
-                }
-            }
-        }
-        if (smallest < 0.0f) {
-            glm::vec3 a = collisionPosition - penetrationVector;
-            glm::vec3 b = glm::vec4(-1.0f,  1.0f, 0.0f, 1.0f) * plane.modelMatrix;
-            glm::vec3 c = glm::vec4(-1.0f, -1.0f, 0.0f, 1.0f) * plane.modelMatrix;
-            glm::vec3 d = glm::vec4( 1.0f, -1.0f, 0.0f, 1.0f) * plane.modelMatrix;
-            glm::vec3 e = glm::vec4( 1.0f,  1.0f, 0.0f, 1.0f) * plane.modelMatrix;
-            if (glm::dot(b, c - b) <= glm::dot(a, c - b) && glm::dot(a, c - b) <= glm::dot(c, c-b) &&
-            glm::dot(b, e - b) <= glm::dot(a, e - b) && glm::dot(a, e - b) <= glm::dot(e, e-b)) {
-                collisionNormal = glm::normalize(plane.normal);
-                penetrationVector = collisionNormal * smallest;
-                velocity *= 0.85f;
-                position -= penetrationVector;
-                applyImpulse = true;
-                impulse = collisionNormal * 60.0f * glm::length(velocity);
-            }
-        }
-    }
-
-    void update(glm::vec3 gravityForce, float deltaTime) {
-        glm::vec3 netAcceleration = gravityForce + impulse;
-        if (applyImpulse) {
-            applyImpulse = false;
-            impulse = glm::vec3(0,0,0);
-            r = glm::length(glm::cross(collisionPosition - position, velocity)); 
-            rotationAxis = glm::cross(collisionPosition - position, collisionNormal);
-        }
-        glm::vec3 netVelocity = netAcceleration * deltaTime;
-        velocity += netVelocity;
-        position += velocity * deltaTime;
-        if (rotationAxis != glm::vec3(0,0,0)) {
-            rotationMatrix = rotate(rotationMatrix, glm::radians(r), rotationAxis);
-        }
-
-        obb.getTranslatedVertices(modelMatrix);
-        obb.velocity = velocity;
     }
 
     void draw(Shader &shader) {
-        modelMatrix = glm::translate(glm::mat4(1.0f), position);
-        modelMatrix = modelMatrix * rotationMatrix;
         shader.setMat4("model", modelMatrix);
         model->Draw(shader);    
-    }
-
-    void reset() {
-        velocity = originalVelocity;
-        position = originalPosition;
-        rotationAxis = glm::vec3(rand() % 1 + 1, rand() % 1 + 1, rand() % 1 + 1);
-        rotationMatrix = glm::mat4(1.0f);
-        r = rand() % 10;
-        rotationMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(r), glm::normalize(rotationAxis));
-        modelMatrix = glm::mat4(1.0f);
     }
 };
 
@@ -305,6 +206,13 @@ int main()
     Die die1(glm::vec3(2.0f, 5.0f, 0.0f), glm::vec3(0.6f, 0.0f, 0.0f));
     Die die2(glm::vec3(-2.0f, 5.0f, 0.0f), glm::vec3(0.8f, 0.0f, 0.0f));
 
+    // PHYSICS
+    resolver = ContactResolver(maxContacts*8);
+    cData.contactArray = contacts;
+    // reset box states
+    CollisionBox box1 = CollisionBox(0.0, 0.0, 0.0, glm::vec3(0,0,0), 0.0, 0.0, 0.0, 0.0, 100000.0, 1.0, 100000.0);
+    CollisionBox box2 = CollisionBox(0.0, 3.0, 0.0, glm::vec3(0,0,0), -10.0, 4.0, 1.0, 3.0, 1.0, 1.0, 1.0);
+    CollisionBox box3 = CollisionBox(0.0, 6.5, 0.0, glm::vec3(0,0,0), -10.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0);
 
     // render loop
     // -----------
@@ -320,47 +228,59 @@ int main()
         // -----
         processInput(window);
 
+        // physics
+        // ------
         if (deltaTime < 1.0) {
 
-            die1.update(gravity, deltaTime);
-            die1.collideWithPlane(plane);
-            die2.update(gravity, deltaTime);
-            die2.collideWithPlane(plane);
+            CollisionBox::boxData[0]->setState(0.0, 0.0, 0.0, glm::vec3(rotation1_y, 0, rotation1_x), 0.0, 0.0, 0.0, 0.0, 10.0, 0.1, 10.0);
 
-            if (reset) {
-                die1.reset();
-                die2.reset();
-                reset = false;
+            // Update the boxes
+            for (unsigned int i = 0; i < CollisionBox::boxCount; i++)
+            {
+                CollisionBox *box = CollisionBox::boxData[i];
+
+                // Run the physics
+                box->body->integrate(deltaTime);
+                box->calculateInternals();
+            }
+            
+            // Perform the contact generation
+
+            // Set up the collision data structure
+            cData.reset(maxContacts);
+            cData.friction = (double)0.9;
+            cData.restitution = (double)0.1;
+            cData.tolerance = (double)0.1;
+            //CollisionBox::allBoxes.size()
+            for (unsigned int i = 0; i < CollisionBox::boxCount; i++)
+            {
+                for (unsigned int j = 0; j < CollisionBox::boxCount; j++)
+                {
+                    CollisionBox *box1 = CollisionBox::boxData[i];
+                    CollisionBox *box2 = CollisionBox::boxData[j];
+
+                    if (box1 != box2) {
+                        CollisionDetector::boxAndBox(*box1, *box2, &cData);
+                    }
+                }
             }
 
-            CollisionInfo c = check_collision(die1.obb, die2.obb);
-
-            if (c.depth != 0.0f) {
-                float d =c.depth;
-                glm::vec3 collidingNormal = c.normal;
-                glm::vec3 penetrationVector = die1.velocity * d;
-                glm::vec3 collidingPosition = c.position;
-
-                die1.velocity = reflect(die1.velocity, collidingNormal) * 0.65f;
-                glm::vec3 cn = collidingNormal * -1.0f;
-                glm::vec3 surfaceTangent = glm::normalize(collidingPosition - die1.position);
-                glm::vec3 st_z = glm::vec3(surfaceTangent.x, surfaceTangent.y, 0.0);
-                rotation1_z = glm::dot(st_z, glm::vec3(cn.x, cn.y, 0.0f));
-                glm::vec3 st_y = glm::vec3(surfaceTangent.x, 0.0, surfaceTangent.z);
-                rotation1_y = glm::dot(st_y, glm::vec3(cn.x, 0.0f, cn.z));
-                glm::vec3 st_x = glm::vec3(0.0f, surfaceTangent.y, surfaceTangent.z);
-                rotation1_x = glm::dot(st_x, glm::vec3(0.0f, cn.y, cn.z));
-            }
-
-            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_x), glm::vec3(1, 0, 0))) * die1.rotationMatrix;
-            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_y), glm::vec3(0, 1, 0))) * die1.rotationMatrix;
-            die1.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(rotation1_z), glm::vec3(0, 0, 1))) * die1.rotationMatrix;
-
-            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_x), glm::vec3(1, 0, 0))) * die2.rotationMatrix;
-            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_y), glm::vec3(0, 1, 0))) * die2.rotationMatrix;
-            die2.rotationMatrix = glm::mat4(glm::angleAxis(glm::radians(-rotation1_z), glm::vec3(0, 0, 1))) * die2.rotationMatrix;
+            // Resolve detected contacts
+            resolver.resolveContacts(
+                cData.contactArray,
+                cData.contactCount,
+                deltaTime
+                );
 
 
+            CollisionBox *box = CollisionBox::boxData[1];
+            box->setModelMatrix(glm::scale((glm::mat4)box->body->transformMatrix, glm::vec3(box->halfSize.x*2, box->halfSize.y*2, box->halfSize.z*2)));
+            die1.modelMatrix = glm::scale(box->getModelMatrix(), glm::vec3(0.5f));
+
+
+            box = CollisionBox::boxData[2];
+            box->setModelMatrix(glm::scale((glm::mat4)box->body->transformMatrix, glm::vec3(box->halfSize.x*2, box->halfSize.y*2, box->halfSize.z*2)));
+            die2.modelMatrix = glm::scale(box->getModelMatrix(), glm::vec3(0.5f));
         }
         // render
         // ------
@@ -386,9 +306,6 @@ int main()
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        // reset viewport
-        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // 2. render scene as normal using the generated depth/shadow map  
         // --------------------------------------------------------------
@@ -397,18 +314,6 @@ int main()
 
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
         glm::mat4 view = camera.GetViewMatrix();
-
-
-        glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
-        die1.obb.setMatrix("projection", projection);
-        die1.obb.setMatrix("view", view);
-        die1.obb.setMatrix("model", die1.modelMatrix);
-        //die1.obb.draw();
-        die2.obb.setMatrix("projection", projection);
-        die2.obb.setMatrix("view", view);
-        die2.obb.setMatrix("model", die2.modelMatrix);
-        //die2.obb.draw();
-        glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
 
         normalShader.use();
         normalShader.setMat4("projection", projection);
@@ -447,14 +352,9 @@ int main()
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, depthMap);
 
+
         die1.draw(basicShader);
         die2.draw(basicShader);
-
-        glDisable(GL_DEPTH_TEST);
-        // Line line(collidingPosition, collidingPosition + rot_axis);
-        // line.setMVP(projection * view);
-        // line.draw();
-        glEnable(GL_DEPTH_TEST);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -580,7 +480,9 @@ void processInput(GLFWwindow *window)
         camera.ProcessKeyboard(RIGHT, deltaTime);
 
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-        reset = true;
+        CollisionBox::boxData[0]->setState(0.0, 0.0, 0.0, glm::vec3(0,0,0), 0.0, 0.0, 0.0, 0.0, 20.0, 0.1, 20.0);
+        CollisionBox::boxData[1]->setState(0.0, 3.0, 0.0, glm::vec3(0,0,0), -10.0, 4.0, 1.0, 3.0, 1.0, 1.0, 1.0);
+        CollisionBox::boxData[2]->setState(0.0, 6.5, 0.0, glm::vec3(0,0,0), -10.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0);
     }
 }
 
@@ -617,6 +519,8 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(plane.modelMatrix)));
     glm::vec3 normal = glm::vec3(0.0f,0.0f,1.0f);
     plane.normal = glm::normalize(normalMatrix * normal);
+    rotation1_x -= glm::radians(xoffset*0.01f);
+    rotation1_y += glm::radians(-1.0f*yoffset*0.01f);
 
     //camera.ProcessMouseMovement(xoffset, yoffset, true);
 }
